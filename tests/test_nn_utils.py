@@ -78,7 +78,6 @@ def test_gradient_clipping():
     loss_c.backward()
     run_gradient_clipping(t1_c, max_norm)
     t1_c_grads = [torch.clone(t.grad) for t in t1_c if t.grad is not None]
-
     assert len(t1_grads) == len(t1_c_grads)
 
     for t1_grad, t1_c_grad in zip(t1_grads, t1_c_grads):

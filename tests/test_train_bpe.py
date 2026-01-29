@@ -1,8 +1,12 @@
 import json
 import time
 
-from .adapters import run_train_bpe
-from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
+if __name__ == "__main__":
+    from adapters import run_train_bpe
+    from common import FIXTURES_PATH, gpt2_bytes_to_unicode
+else:
+    from .adapters import run_train_bpe
+    from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
 
 def test_train_bpe_speed():
@@ -86,3 +90,44 @@ def test_train_bpe_special_tokens(snapshot):
             "merges": merges,
         },
     )
+
+if __name__ == "__main__":
+    # test_train_bpe()
+    
+    import pickle
+    from pathlib import Path
+    import regex as re
+    
+    PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    PAT = re.compile(PATTERN)
+
+    snapshot_path = Path(r"/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/tests/_snapshots/test_train_bpe_special_tokens.pkl")
+
+    with open(snapshot_path, "rb") as f:
+        snapshot_data = pickle.load(f)
+
+    reference_merges = snapshot_data["merges"]
+    
+    input_path = FIXTURES_PATH / "tinystories_sample_5M.txt"
+    alter_path = FIXTURES_PATH / "tinystories_sample_5M_alter.txt"
+    
+    alt_special_token = "<|endoftext|>"
+    
+    with open(input_path, "r", encoding="utf-8") as f, open(alter_path, "w", encoding="utf-8") as f_out:
+        data = f.read()
+        data.replace("<|endoftext|>", alt_special_token)
+        f_out.write(data)
+    
+    vocab, merges = run_train_bpe(
+        input_path=alter_path,
+        vocab_size=1000,
+        special_tokens=[alt_special_token],
+    )
+    
+    for i in range(max(len(merges), len(reference_merges))):
+        merges_i = merges[i] if i < len(merges) else None
+        reference_merges_i = reference_merges[i] if i < len(reference_merges) else None
+        
+        print(f"Merge {i}: Computed: {merges_i}, Reference: {reference_merges_i}")
+        if merges_i != reference_merges_i:
+            print("Mismatch found!")

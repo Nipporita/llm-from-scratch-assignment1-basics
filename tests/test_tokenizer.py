@@ -9,8 +9,15 @@ import psutil
 import pytest
 import tiktoken
 
-from .adapters import get_tokenizer
-from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
+# %load_ext autoreload
+# %autoreload 2
+
+if __name__ == "__main__":
+    from adapters import get_tokenizer
+    from common import FIXTURES_PATH, gpt2_bytes_to_unicode
+else:
+    from .adapters import get_tokenizer
+    from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
 VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
 MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
@@ -462,3 +469,54 @@ def _encode(tokenizer, text):
     for just this function. We set the memory limit to 1MB.
     """
     return tokenizer.encode(text)
+
+if __name__ == "__main__":
+    # print("test: roundtrip empty")
+    # test_roundtrip_empty()
+    # print("test: empty matches tiktoken")
+    # test_empty_matches_tiktoken()
+    # print("test: roundtrip single character")
+    # test_roundtrip_single_character()
+    # print("test: single character matches tiktoken")
+    # test_single_character_matches_tiktoken()
+    # print("test: roundtrip single unicode character")
+    # test_roundtrip_single_unicode_character()
+    # print("test: single unicode character matches tiktoken")
+    # test_single_unicode_character_matches_tiktoken()
+    # print("test: roundtrip ascii string")
+    # test_roundtrip_ascii_string()
+    # print("test: ascii string matches tiktoken")
+    # test_ascii_string_matches_tiktoken()
+    # print("test: roundtrip unicode string")
+    # test_roundtrip_unicode_string()
+    # print("test: unicode string matches tiktoken")
+    # test_unicode_string_matches_tiktoken()
+    # print("test: roundtrip unicode string with special tokens")
+    # test_roundtrip_unicode_string_with_special_tokens()
+    # print("test: unicode string with special tokens matches tiktoken")
+    # test_unicode_string_with_special_tokens_matches_tiktoken()
+    # print("test: overlapping special tokens")
+    # test_overlapping_special_tokens()
+    # print("test: address roundtrip")
+    # test_address_roundtrip()
+    # print("test: address matches tiktoken")
+    # test_address_matches_tiktoken()
+    # print("test: german roundtrip")
+    # test_german_roundtrip()
+    # print("test: german matches tiktoken")
+    # test_german_matches_tiktoken()
+    # print("test: tinystories sample roundtrip")
+    # test_tinystories_sample_roundtrip()
+    # print("test: tinystories matches tiktoken")
+    # test_tinystories_matches_tiktoken()
+    # print("test: encode special token trailing newlines")
+    # test_encode_special_token_trailing_newlines()
+    # print("test: encode special token double newline non whitespace")
+    # test_encode_special_token_double_newline_non_whitespace()
+    print("test: encode iterable tinystories sample roundtrip")
+    test_encode_iterable_tinystories_sample_roundtrip()
+    print("test: encode iterable tinystories matches tiktoken")
+    test_encode_iterable_tinystories_matches_tiktoken()
+    print("test: encode iterable memory usage")
+    test_encode_iterable_memory_usage()
+    pass
