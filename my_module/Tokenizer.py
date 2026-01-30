@@ -1,5 +1,6 @@
 from typing import Optional, Iterable, Iterator
 
+import time
 import regex as re
 import os
 from tqdm import tqdm
@@ -237,7 +238,7 @@ def init_worker(vocab_path, merges_path, special_tokens):
     )
 
 def TokenizeChunk(args):
-    idx, input_path, start, end = args
+    idx, input_path, start, end, save_path = args
     
     with open(input_path, "rb") as f:
         f.seek(start)
@@ -246,11 +247,27 @@ def TokenizeChunk(args):
     text = data.decode("utf-8", errors="ignore")
     token_ids = _TOKENIZER.encode(text)
 
-    return idx, token_ids
+    output_path = save_path + f".part{idx}"
+    
+    arr = np.memmap(
+        output_path,
+        dtype=np.uint16,
+        mode="w+",
+        shape=(len(token_ids),),
+    )
+    arr[:] = np.array(token_ids, dtype=np.uint16)[:]
+    arr.flush()
+    
+    return idx, None
 
-def TokenizeData(input_path: str, special_tokens: Optional[list[str]] = None):
-    num_workers = min(8, os.cpu_count())
-    num_chunks = num_workers * 8   # 关键：chunk 数要明显多于 worker
+def TokenizeData(input_path: str,
+                 output_path: str = "/root/autodl-tmp/",
+                 vocab_path: str = "/root/llm-from-scratch-assignment1-basics-main/my_module/owt_bpe_vocab.pkl",
+                 merges_path: str = "/root/llm-from-scratch-assignment1-basics-main/my_module/owt_bpe_merges.pkl",
+                 special_tokens: Optional[list[str]] = None,
+                 ):
+    num_workers = min(16, os.cpu_count())
+    num_chunks = num_workers * 32   # 关键：chunk 数要明显多于 worker
 
     from cs336_basics.pretokenization_example import find_chunk_boundaries
 
@@ -258,6 +275,11 @@ def TokenizeData(input_path: str, special_tokens: Optional[list[str]] = None):
         boundaries = find_chunk_boundaries(
             f, num_chunks, b"<|endoftext|>"
         )
+    
+    # np.memmap 存储
+    input_filename = os.path.basename(input_path)
+    pure_name, _ = os.path.splitext(input_filename)
+    save_path = os.path.join(output_path, f"{pure_name}")
 
     max_size = max(
         boundaries[i+1] - boundaries[i]
@@ -276,7 +298,7 @@ def TokenizeData(input_path: str, special_tokens: Optional[list[str]] = None):
         )
 
     tasks = [
-        (idx, input_path, start, end)
+        (idx, input_path, start, end, save_path)
         for idx, (start, end) in enumerate(
             zip(boundaries[:-1], boundaries[1:])
         )
@@ -290,8 +312,8 @@ def TokenizeData(input_path: str, special_tokens: Optional[list[str]] = None):
         processes=num_workers,
         initializer=init_worker,
         initargs=(
-            "./owt_bpe_vocab.pkl",
-            "./owt_bpe_merges.pkl",
+            vocab_path,
+            merges_path,
             special_tokens,
         ),
     ) as pool:
@@ -302,23 +324,49 @@ def TokenizeData(input_path: str, special_tokens: Optional[list[str]] = None):
             results[idx] = token_ids
 
     # 合并结果
-    result = []
-    for token_ids in results:
-        result.extend(token_ids)
+    t = time.time()
+    shape = 0
     
-    result = np.array(result, dtype=np.uint16)
+    output_filename = f"{pure_name}.npy"
     
-    # np.memmap 存储
+    for idx in range(len(results)):
+        part_path = save_path + f".part{idx}"
+        part_arr = np.memmap(
+            part_path,
+            dtype=np.uint16,
+            mode="r",
+        )
+        shape += part_arr.shape[0]
+        part_arr._mmap.close()
     
     arr = np.memmap(
-        "./tokenized_data.npy",
+        os.path.join(output_path, output_filename),
         dtype=np.uint16,
         mode="w+",
-        shape=result.shape,
+        shape=shape,
     )
-    arr[:] = result[:]
+    
+    start_idx = 0
+    
+    for idx in range(len(results)):
+        part_path = save_path + f".part{idx}"
+        part_arr = np.memmap(
+            part_path,
+            dtype=np.uint16,
+            mode="r",
+        )
+        part_size = part_arr.shape[0]
+        arr[start_idx:start_idx + part_size] = part_arr[:]
+        start_idx += part_size
+        part_arr._mmap.close()
+    
     arr.flush()
+    
+    for idx in range(len(results)):
+        part_path = save_path + f".part{idx}"
+        os.remove(part_path)
 
+    print(f"Tokenization completed in {time.time() - t:.2f} seconds.")
 
 if __name__ == "__main__":
     # temp = "brea   amjioap ! jewpo ! amopjio  ! a mnpjip iojajiopm i12345678"
@@ -327,7 +375,18 @@ if __name__ == "__main__":
     
     TokenizeData(
         "/home/nipporita/大模型/Week 1/lfs-data/owt_valid.txt",
+        "/home/nipporita/大模型/Week 1/lfs-data",
+        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/owt_bpe_vocab.pkl",
+        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/owt_bpe_merges.pkl",
         special_tokens=[
             b"<|endoftext|>",
         ],
     )
+    
+    # TokenizeData(
+    #     "/root/assignment1-data/owt_train.txt",
+    #     special_tokens=[
+    #         b"<|endoftext|>",
+    #     ],
+    # )
+    pass

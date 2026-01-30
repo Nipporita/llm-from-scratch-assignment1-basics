@@ -33,26 +33,27 @@ def MyGetBatch(dataset: npt.NDArray, batch_size: int, context_length: int, devic
         torch.from_numpy(y).to(device),
     )
 
-def MySaveCheckpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]):
+def MySaveCheckpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], loss: Optional[list[float]] = None) -> None:
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "iteration": iteration,
+        "loss": loss if loss is not None else [],
     }
     torch.save(checkpoint, out)
 
-def MyLoadCheckpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> int:
+def MyLoadCheckpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> tuple[int, list[float]]:
     checkpoint = torch.load(src)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     iteration = checkpoint["iteration"]
-    return iteration
+    loss = checkpoint.get("loss", [])
+    return iteration, loss
 
 # 定义单次训练：
 
 from my_module.optim import MyCrossEntropy, MyGradientClipping, MyAdamW, MyRateScheduling
 from my_module.nn import MyTransformer
-
 
 def SingleTrain(model: torch.nn.Module, optimizer: torch.optim.Optimizer, data: tuple[Tensor, Tensor], T: int, lrarg: tuple[float, float, int, int]) -> float:
     lr = MyRateScheduling(T, *lrarg)
@@ -66,17 +67,21 @@ def SingleTrain(model: torch.nn.Module, optimizer: torch.optim.Optimizer, data: 
     logits = model(x_batch)  # (batch_size, context_length, vocab_size)
     logits = rearrange(logits, "b c v -> (b c) v")  # (batch_size * context_length, vocab_size)
     targets = rearrange(y_batch, "b c -> (b c)")  # (batch_size * context_length,)
-    
-    loss = MyCrossEntropy(logits, targets)  # ()
-    
+
+    # ========= 只改这里 =========
+    loss = torch.nn.functional.cross_entropy(logits, targets)
+    # ===========================
+
     optimizer.zero_grad()
     loss.backward()
     
-    MyGradientClipping(model.parameters(), max_norm=1.0)
+    # MyGradientClipping(model.parameters(), max_norm=1.0)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     
     optimizer.step()
     
     return loss.item()
+
 
 def _innerTrain(
     model: torch.nn.Module,
@@ -99,10 +104,13 @@ def _innerTrain(
         unit="iter",
     )
     
+    losses = []
+    
     try:
         for T in progress:
             data = MyGetBatch(dataset, batch_size, context_length, device)
             loss = SingleTrain(model, optimizer, data, T, lrarg)
+            losses.append(loss)
         
         success = True
     except BaseException as e:
@@ -110,7 +118,7 @@ def _innerTrain(
         print(f"Training interrupted at step {T} due to exception: {e}")
         success = False
     
-    return success, T
+    return success, T, losses
 
 def Train(
     path: str,
@@ -135,6 +143,11 @@ def Train(
         meta.update(meta_kwargs)
         with open(meta_path, "wb") as f:
             pickle.dump(meta, f)
+    
+    if "device" in meta_kwargs:
+        meta["device"] = meta_kwargs["device"]
+    
+    print(meta)
 
     device = meta.get("device", "cpu")
     
@@ -153,10 +166,12 @@ def Train(
     optimizer = MyAdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
     start_step = 0
     if os.path.exists(path):
-        start_step = MyLoadCheckpoint(path, model, optimizer)
+        start_step, prev_losses = MyLoadCheckpoint(path, model, optimizer)
         print(f"Resumed from checkpoint at step {start_step}.")
+    else:
+        prev_losses = []
     
-    success, final_step = _innerTrain(
+    success, final_step, losses = _innerTrain(
         model=model,
         optimizer=optimizer,
         dataset=dataset,
@@ -173,14 +188,20 @@ def Train(
         max_iters=meta["max_iters"],
     )
     
-    MySaveCheckpoint(model, optimizer, final_step, path)
+    MySaveCheckpoint(model, optimizer, final_step, path, loss=prev_losses + losses)
 
 if __name__ == "__main__":
     
+    import cProfile
+    import pstats
+    
+    pr = cProfile.Profile()
+    pr.enable()
+
     Train(
-        path="./checkpoint.pth",
-        dataset_path="./tokenized_data.npy",
-        meta_path="./meta.pkl",
+        path="/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/checkpoint.pth",
+        dataset_path="/home/nipporita/大模型/Week 1/lfs-data/owt_valid.npy",
+        meta_path="/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/meta.pkl",
         # 结构参数
         vocab_size=32000,
         num_layers=4,
@@ -196,7 +217,14 @@ if __name__ == "__main__":
         lr_final=1e-5,
         lr_warmup_iters=1000,
         max_iters=10000,
-        # device="cuda" if torch.cuda.is_available() else "cpu",
-        device = 'cpu',
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    pr.disable()
+
+    stats = pstats.Stats(pr)
+    stats.strip_dirs()
+    stats.sort_stats("cumtime")
+    stats.print_stats(30)
+    
     
