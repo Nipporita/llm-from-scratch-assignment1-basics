@@ -163,3 +163,4 @@ cython_debug/
 *.zip
 *.npy
 pre_token_freq.pkl
+my_module/checkpoint.pth
