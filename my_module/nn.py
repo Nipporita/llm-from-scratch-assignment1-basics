@@ -298,10 +298,10 @@ class MyPreNormTransformerBlock(torch.nn.Module):
 class MyTransformer(torch.nn.Module):
     def __init__(self,
                  # embedding
-                 num_embeddings: int, embedding_dim: int,
+                 num_embeddings: int, d_model: int, 
                  # transform
                  num_layers: int,
-                 d_model: int, num_heads: int, theta: float, max_seq_len: int,
+                 num_heads: int, theta: float, max_seq_len: int,
                  # SwiGLU
                  d_ff: int,
                  # RMSNorm
@@ -311,7 +311,7 @@ class MyTransformer(torch.nn.Module):
         
         super().__init__()
         
-        self.token_embeddings = MyEmbedding(num_embeddings, embedding_dim, device, dtype)
+        self.token_embeddings = MyEmbedding(num_embeddings, d_model, device, dtype)
         self.layers = torch.nn.ModuleList([
             MyPreNormTransformerBlock(
                 d_model, num_heads, theta, max_seq_len,
@@ -324,8 +324,9 @@ class MyTransformer(torch.nn.Module):
         self.lm_head = MyLinear(d_model, num_embeddings, device, dtype)
     
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        # token_ids: Int[torch.Tensor, " batch_size seq_len"]
         embed = self.token_embeddings.forward(token_ids)
-        
+        # embed: Float[torch.Tensor, " batch_size seq_len embedding_dim"]
         for layer in self.layers:
             embed = layer.forward(embed)
         

@@ -445,7 +445,6 @@ def run_transformer_lm(
         vocab_size,
         d_model,
         num_layers,
-        d_model,
         num_heads,
         rope_theta,
         context_length,
@@ -692,7 +691,7 @@ def run_load_checkpoint(
     return MyLoadCheckpoint(src, model, optimizer)
 
 
-from cs336_basics.Tokenizer import Tokenizer
+from my_module.Tokenizer import Tokenizer
 
 def get_tokenizer(
     vocab: dict[int, bytes],
@@ -753,7 +752,7 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    from cs336_basics.BPE import train_bpe
+    from my_module.BPE import train_bpe
     return train_bpe(
         input_path=input_path,
         vocab_size=vocab_size,

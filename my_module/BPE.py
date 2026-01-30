@@ -9,6 +9,8 @@ import heapq
 
 import os
 
+import pickle
+
 
 PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 PAT = re.compile(PATTERN)
@@ -164,8 +166,8 @@ def train_bpe(
     
     text_chunk = ""
     
-    num_processes = 4
-    num_chunks = 4
+    num_processes = 8
+    num_chunks = 32
     max_chunk_size = os.path.getsize(input_path) // num_chunks
     
     from cs336_basics.pretokenization_example import find_chunk_boundaries
@@ -220,6 +222,13 @@ def train_bpe(
     
     vocab = {}
     
+    if __name__ == "__main__":
+        # store byte tokens
+        with open("pre_token_freq.pkl", "wb") as f:
+            pickle.dump(pre_token_freq, f)
+        with open("special_tokens.pkl", "wb") as f:
+            pickle.dump(special_tokens, f)
+        
     for i in range(256):
         vocab[new_vocab] = bytes([i])
         new_vocab += 1
@@ -401,14 +410,223 @@ def train_bpe(
     
     return new_vocab, merges
 
+def train_bpe_from_token_freq(freq_path: str | os.PathLike, special_tokens_path: str | os.PathLike, vocab_size: int):
+    
+    # BPE training
+    
+    with open(freq_path, "rb") as f:
+        pre_token_freq = pickle.load(f)
+    
+    with open(special_tokens_path, "rb") as f:
+        special_tokens = pickle.load(f)
+    
+    vocab_list = [i for i in range(256)]
+    new_vocab = 0
+    
+    vocab = {}
+    
+    for i in range(256):
+        vocab[new_vocab] = bytes([i])
+        new_vocab += 1
+    
+    merges = []
+    
+    pair_freq = {}
+    pair_occurence = {}
+    
+    pre_token_quasi_linked_list = {}
+    
+    print("Initializing quasi linked list...")
+    
+    for pre_token in tqdm(pre_token_freq.keys()):
+        quasi_linked_list = {
+            "index": [i for i in range(len(pre_token))],
+            "char": [pre_token[i] for i in range(len(pre_token))],
+            "next": [(i + 1) if i + 1 < len(pre_token) else None for i in range(len(pre_token))],
+            "prev": [(i - 1) if i - 1 >= 0 else None for i in range(len(pre_token)) ],
+            "len": len(pre_token),
+        }
+        pre_token_quasi_linked_list[pre_token] = quasi_linked_list
+    print("Quasi linked list initialized.")
+    print("BPE training started.")
+    # init
+    pre_token_freq_tqdm = tqdm(pre_token_freq.items())
+    for pre_token, freq in pre_token_freq_tqdm:
+        idx = 0
+        next_idx = pre_token_quasi_linked_list[pre_token]["next"][idx]
+        
+        pre_token_freq_tqdm.set_description(f"Processing token of length {len(pre_token)}")
+        
+        while next_idx is not None:
+            pair = (pre_token_quasi_linked_list[pre_token]["char"][idx], pre_token_quasi_linked_list[pre_token]["char"][next_idx])
+            if pair in pair_freq:
+                pair_freq[pair] += freq
+                pair_occurence[pair].add((pre_token, idx))
+            else:
+                pair_freq[pair] = freq
+                pair_occurence[pair] = set()
+                pair_occurence[pair].add((pre_token, idx))
+            idx = next_idx
+            next_idx = pre_token_quasi_linked_list[pre_token]["next"][idx]
+    
+    print("Initialization done.")
+    def _sort_func(x):
+        return (vocab[x[1][0]], vocab[x[1][1]])
+    
+    def _valid(_pair):
+        minus_freq, pair = _pair
+        freq = - minus_freq
+        
+        if pair in pair_freq and pair_freq[pair] == freq:
+            return True
+        else:
+            return False
+    
+    pair_freq_heap = [(-freq, pair) for pair, freq in pair_freq.items()]
+    heapq.heapify(pair_freq_heap)
+    
+    for _ in trange(vocab_size - len(special_tokens) - 256):
+        most_frequent_pair_freq_pair = heapq.heappop(pair_freq_heap)
+        while not _valid(most_frequent_pair_freq_pair):
+            if pair_freq_heap:
+                most_frequent_pair_freq_pair = heapq.heappop(pair_freq_heap)
+            else:
+                break
+        if not _valid(most_frequent_pair_freq_pair):
+            break
+        
+        most_frequent_pair_freq_pairs = [most_frequent_pair_freq_pair]
+        while pair_freq_heap and pair_freq_heap[0][0] == most_frequent_pair_freq_pair[0]:
+            candidate = heapq.heappop(pair_freq_heap)
+            if _valid(candidate):
+                most_frequent_pair_freq_pairs.append(candidate)
+        
+        if len(most_frequent_pair_freq_pairs) != 1:
+            most_frequent_pair_freq_pair = max(most_frequent_pair_freq_pairs, key=_sort_func)
+            most_frequent_pair_freq_pairs.remove(most_frequent_pair_freq_pair)
+            
+            most_frequent_pair_freq_pairs = set(most_frequent_pair_freq_pairs)
+            for _pair in most_frequent_pair_freq_pairs:
+                heapq.heappush(pair_freq_heap, _pair)
+        
+        most_frequent_pair = most_frequent_pair_freq_pair[1]
+        
+        if pair_freq[most_frequent_pair] == 0:
+            break
+        
+        merges.append((vocab[most_frequent_pair[0]], vocab[most_frequent_pair[1]]))
+        vocab[new_vocab] = bytes(vocab[most_frequent_pair[0]] + vocab[most_frequent_pair[1]])
+        vocab_list.append(new_vocab)
+        
+        # update pre_token_quasi_linked_list, pair_freq, pair_occurence
+        
+        changed_pair_freq = set()
+        
+        most_frequent_pair_occurrences = pair_occurence[most_frequent_pair].copy()
+        for occurrence in most_frequent_pair_occurrences:
+            pre_token = occurrence[0]
+            idx = occurrence[1]
+            
+            next_idx = pre_token_quasi_linked_list[pre_token]["next"][idx]
+            
+            if next_idx is None:
+                continue
+            # next_idx is not None
+            next_next_idx = pre_token_quasi_linked_list[pre_token]["next"][next_idx]
+            
+            prev_idx = pre_token_quasi_linked_list[pre_token]["prev"][idx]
+            
+            # considering previous pair
+            if prev_idx is not None:
+                # delete old pair
+                prev_pair = (pre_token_quasi_linked_list[pre_token]["char"][prev_idx], pre_token_quasi_linked_list[pre_token]["char"][idx])
+                pair_freq[prev_pair] -= pre_token_freq[pre_token]
+                if prev_pair not in changed_pair_freq:
+                    changed_pair_freq.add(prev_pair)
+                # if pair_freq[prev_pair] == 0:
+                #     del pair_freq[prev_pair]
+                pair_occurence[prev_pair].discard((pre_token, prev_idx))
+                
+                # create new pair
+                new_pair = (pre_token_quasi_linked_list[pre_token]["char"][prev_idx], new_vocab)
+                if new_pair in pair_freq:
+                    pair_freq[new_pair] += pre_token_freq[pre_token]
+                    pair_occurence[new_pair].add((pre_token, prev_idx))
+                else:
+                    pair_freq[new_pair] = pre_token_freq[pre_token]
+                    pair_occurence[new_pair] = set()
+                    pair_occurence[new_pair].add((pre_token, prev_idx))
+                
+                if new_pair not in changed_pair_freq:
+                    changed_pair_freq.add(new_pair)
+            
+            # considering next pair
+            if next_next_idx is not None:
+                # delete old pair
+                next_pair = (pre_token_quasi_linked_list[pre_token]["char"][next_idx], pre_token_quasi_linked_list[pre_token]["char"][next_next_idx])
+                
+                pair_freq[next_pair] -= pre_token_freq[pre_token]
+                # if pair_freq[next_pair] == 0:
+                #     del pair_freq[next_pair]
+                if next_pair not in changed_pair_freq:
+                    changed_pair_freq.add(next_pair)
+                pair_occurence[next_pair].discard((pre_token, next_idx))
+                # create new pair
+                new_pair = (new_vocab, pre_token_quasi_linked_list[pre_token]["char"][next_next_idx])
+                if new_pair in pair_freq:
+                    pair_freq[new_pair] += pre_token_freq[pre_token]
+                    pair_occurence[new_pair].add((pre_token, idx))
+                else:
+                    pair_freq[new_pair] = pre_token_freq[pre_token]
+                    pair_occurence[new_pair] = set()
+                    pair_occurence[new_pair].add((pre_token, idx))
+                
+                if new_pair not in changed_pair_freq:
+                    changed_pair_freq.add(new_pair)
+            
+            # handling this pair
+            pre_token_quasi_linked_list[pre_token]["char"][idx] = new_vocab
+            
+            pre_token_quasi_linked_list[pre_token]["next"][idx] = next_next_idx
+            if next_next_idx is not None:
+                pre_token_quasi_linked_list[pre_token]["prev"][next_next_idx] = idx
+            
+            pre_token_quasi_linked_list[pre_token]["next"][next_idx] = None
+            pre_token_quasi_linked_list[pre_token]["prev"][next_idx] = None
+            
+            # pair_freq[most_frequent_pair] -= pre_token_freq[pre_token]
+        
+        pair_freq[most_frequent_pair] = 0
+        
+        for changed_pair in changed_pair_freq:
+            if pair_freq[changed_pair] > 0:
+                heapq.heappush(pair_freq_heap, (-pair_freq[changed_pair], changed_pair))
+        
+        new_vocab += 1
+    
+    # 算法问题
+    new_vocab = {}
+    for i in range(len(special_tokens)):
+        new_vocab[i] = bytes(special_tokens[i].encode('utf-8'))
+    for i in range(len(vocab)):
+        new_vocab[i + len(special_tokens)] = vocab[i]
+    
+    return new_vocab, merges
+
 if __name__ == "__main__":
     
     import pickle
     
-    vocab, merges = train_bpe(
-        r"/home/nipporita/大模型/Week 1/lfs-data/owt_train.txt",
-        32000,
-        ["<|endoftext|>"]
+    # train_bpe(
+    #     r"/home/nipporita/大模型/Week 1/lfs-data/owt_train.txt",
+    #     32000,
+    #     ["<|endoftext|>"]
+    # )
+    
+    vocab, merges = train_bpe_from_token_freq(
+        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/pre_token_freq.pkl",
+        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/special_tokens.pkl",
+        32000
     )
     
     # 序列化存储
