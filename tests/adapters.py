@@ -688,7 +688,7 @@ def run_load_checkpoint(
     """
     
     from my_module.train import MyLoadCheckpoint
-    return MyLoadCheckpoint(src, model, optimizer)
+    return MyLoadCheckpoint(src, model, optimizer)[0]
 
 
 from my_module.Tokenizer import Tokenizer
@@ -756,7 +756,7 @@ def run_train_bpe(
     return train_bpe(
         input_path=input_path,
         vocab_size=vocab_size,
-        special_tokens=[token.encode('utf-8') for token in special_tokens],
+        special_tokens=special_tokens,
         **kwargs,
     )
 

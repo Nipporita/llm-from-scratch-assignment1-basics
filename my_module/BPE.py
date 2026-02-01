@@ -70,56 +70,52 @@ def run_parallel(tasks, n_workers):
     with mp.Pool(processes=n_workers) as pool:
         async_result = pool.map_async(read_chunk, tasks_with_queue)
 
-        chunk_pbar = tqdm(
-            total=n_chunks,
-            desc="Reads",
-            position=0,
-            leave=True,
-        )
+        # ---------- UI 只作为附属 ----------
+        if __name__ == "__main__":
+            from tqdm import tqdm
 
-        part_pbar = tqdm(
-            total=0,                 # 动态 total
-            desc="Parts",
-            position=1,
-            leave=True,
-            mininterval=0.5,
-            unit="chars",
-        )
-        
-        chunk_done_pbar = tqdm(
-            total=n_chunks,
-            desc="Chunks Done",
-            position=2,
-            leave=True,
-        )
+            chunk_pbar = tqdm(total=n_chunks, desc="Reads", position=0, leave=True)
+            part_pbar = tqdm(
+                total=0,
+                desc="Parts",
+                position=1,
+                leave=True,
+                mininterval=0.5,
+                unit="chars",
+            )
+            chunk_done_pbar = tqdm(total=n_chunks, desc="Chunks Done", position=2, leave=True)
 
-        chunks_done = 0
+            chunks_done = 0
 
-        while chunks_done < n_chunks:
-            tag, value = progress_queue.get()
+            # ⚠️ 注意：只在 async_result 没完成时消费 queue
+            while not async_result.ready():
+                try:
+                    tag, value = progress_queue.get(timeout=0.2)
+                except Exception:
+                    continue
 
-            if tag == "read_done":
-                chunk_pbar.update(value)
+                if tag == "read_done":
+                    chunk_pbar.update(value)
+                elif tag == "part_report":
+                    part_pbar.total += value
+                elif tag == "part_len":
+                    part_pbar.update(value)
+                elif tag == "chunk_done":
+                    chunks_done += value
+                    chunk_done_pbar.update(value)
 
-            elif tag == "part_report":
-                # 只改 total，不 refresh
-                part_pbar.total += value
+            chunk_pbar.close()
+            part_pbar.close()
+            chunk_done_pbar.close()
 
-            elif tag == "part_len":
-                # 只 update，让 tqdm 自己决定是否 redraw
-                part_pbar.update(value)
-            
-            elif tag == "chunk_done":
-                chunks_done += value
-                chunk_done_pbar.update(value)
-            
+        # ---------- 强制跑满的关键 ----------
+        pool.close()   # 不再接收新任务
+        pool.join()    # 等待所有 worker 真正结束
 
-        chunk_pbar.close()
-        part_pbar.close()
-
-        results = async_result.get()
+        results = async_result.get()  # 🔒 阻塞点：所有结果必须返回
 
     return results
+
 
 def train_bpe(
     input_path: str | os.PathLike,
@@ -167,13 +163,13 @@ def train_bpe(
     text_chunk = ""
     
     num_processes = 8
-    num_chunks = 32
+    num_chunks = 8
     max_chunk_size = os.path.getsize(input_path) // num_chunks
     
     from cs336_basics.pretokenization_example import find_chunk_boundaries
     
     with open(input_path, "rb") as f:
-        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
+        boundaries = find_chunk_boundaries(f, num_chunks, b"<|endoftext|>")
     
     max_size = max(boundaries[i+1] - boundaries[i] for i in range(len(boundaries)-1))
     
@@ -188,24 +184,18 @@ def train_bpe(
         (idx, input_path, start, end, special_tokens)
         for idx, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:]))
     ]
+        
+    results = run_parallel(
+        tasks,
+        num_processes,
+    )
     
-    num_tasks = len(tasks)
-    
-    for i in range(0, num_tasks, num_processes):
-        
-        task_chunk = tasks[i:min(i+num_processes, num_tasks)]
-        
-        results = run_parallel(
-            task_chunk,
-            len(task_chunk)
-        )
-        
-        for idx, pre_token_freq_small in results:
-            for byte_token, freq in pre_token_freq_small.items():
-                if byte_token in pre_token_freq:
-                    pre_token_freq[byte_token] += freq
-                else:
-                    pre_token_freq[byte_token] = freq
+    for idx, pre_token_freq_small in results:
+        for byte_token, freq in pre_token_freq_small.items():
+            if byte_token in pre_token_freq:
+                pre_token_freq[byte_token] += freq
+            else:
+                pre_token_freq[byte_token] = freq
                 
     # for start, end in zip(boundaries[:-1], boundaries[1:]):
     #     f.seek(start)
@@ -616,36 +606,64 @@ def train_bpe_from_token_freq(freq_path: str | os.PathLike, special_tokens_path:
 if __name__ == "__main__":
     
     import pickle
-    
+    import cProfile
+    import pstats
+    import tracemalloc
+
+    # =========================
+    # tracemalloc 开始
+    # =========================
+    tracemalloc.start()
+
+    pr = cProfile.Profile()
+    pr.enable()
+
+    # -------------------------------------------------
+    # 你原来的代码（完全不动）
+    # -------------------------------------------------
+
     # train_bpe(
     #     r"/home/nipporita/大模型/Week 1/lfs-data/owt_train.txt",
     #     32000,
     #     ["<|endoftext|>"]
     # )
-    
-    vocab, merges = train_bpe_from_token_freq(
-        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/pre_token_freq.pkl",
-        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/special_tokens.pkl",
-        32000
-    )
-    
-    # 序列化存储
-    with open("/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/owt_bpe_vocab.pkl", "wb") as f:
-        pickle.dump(vocab, f)
-    
-    with open("/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/owt_bpe_merges.pkl", "wb") as f:
-        pickle.dump(merges, f)
-    
-    # vocab, merges = train_bpe(
-    #     r"/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-train.txt",
-    #     10000,
-    #     ["<|endoftext|>"]
+
+    # vocab, merges = train_bpe_from_token_freq(
+    #     "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/pre_token_freq.pkl",
+    #     "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/special_tokens.pkl",
+    #     32000
     # )
-    
-    # with open("/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/tinystories_bpe_vocab.pkl", "wb") as f:
-    #     pickle.dump(vocab, f)
-    
-    # with open("/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/tinystories_bpe_merges.pkl", "wb") as f:
-    #     pickle.dump(merges, f)
-    
+
+    vocab, merges = train_bpe(
+        r"/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-train.txt",
+        10000,
+        ["<|endoftext|>"]
+    )
+
+    pr.disable()
+
+    # =========================
+    # cProfile 输出
+    # =========================
+    stats = pstats.Stats(pr)
+    stats.strip_dirs()
+    stats.sort_stats("cumtime")
+    stats.print_stats(30)
+
+    # =========================
+    # tracemalloc 结果
+    # =========================
+    current, peak = tracemalloc.get_traced_memory()
+    print(f"\n[tracemalloc] Current: {current / 1024 / 1024:.2f} MB")
+    print(f"[tracemalloc] Peak:    {peak / 1024 / 1024:.2f} MB")
+
+    # 看最吃内存的代码位置
+    snapshot = tracemalloc.take_snapshot()
+    top_stats = snapshot.statistics("lineno")
+
+    print("\n[tracemalloc] Top 10 memory allocations:")
+    for stat in top_stats[:10]:
+        print(stat)
+
+    tracemalloc.stop()
     

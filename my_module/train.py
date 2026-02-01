@@ -12,14 +12,17 @@ from collections.abc import Callable, Iterable
 import math
 
 import tqdm
+import time
 import pickle
+
+from my_module.shutdown_now import shutdown_now
 
 from einops import rearrange, einsum
 
 def MyGetBatch(dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
     data_len = dataset.shape[0]
-    ix = np.random.randint(0, data_len - context_length - 1, size=batch_size)
+    ix = np.random.randint(0, data_len - context_length, size=batch_size)
 
     x = np.empty((batch_size, context_length), dtype=np.int64)
     y = np.empty_like(x)
@@ -106,19 +109,28 @@ def _innerTrain(
     
     losses = []
     
+    start_time = time.time()
+    target_time = 7 * 60 * 60  # 7 hours
+    
+    ex = None
     try:
         for T in progress:
             data = MyGetBatch(dataset, batch_size, context_length, device)
             loss = SingleTrain(model, optimizer, data, T, lrarg)
             losses.append(loss)
+            if time.time() - start_time > target_time:
+                print(f"Reached target training time of {target_time} seconds at step {T}.")
+                break
         
         success = True
     except BaseException as e:
-        progress.close()
+        ex = e
         print(f"Training interrupted at step {T} due to exception: {e}")
         success = False
+    finally:
+        progress.close()
     
-    return success, T, losses
+    return success, T, losses, ex
 
 def Train(
     path: str,
@@ -171,7 +183,7 @@ def Train(
     else:
         prev_losses = []
     
-    success, final_step, losses = _innerTrain(
+    success, final_step, losses, e = _innerTrain(
         model=model,
         optimizer=optimizer,
         dataset=dataset,
@@ -189,6 +201,8 @@ def Train(
     )
     
     MySaveCheckpoint(model, optimizer, final_step, path, loss=prev_losses + losses)
+    
+    return not isinstance(e, KeyboardInterrupt)
 
 if __name__ == "__main__":
     
@@ -198,7 +212,7 @@ if __name__ == "__main__":
     pr = cProfile.Profile()
     pr.enable()
 
-    Train(
+    if_shutdown = Train(
         path="/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/checkpoint.pth",
         dataset_path="/home/nipporita/大模型/Week 1/lfs-data/owt_valid.npy",
         meta_path="/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/meta.pkl",
@@ -227,4 +241,5 @@ if __name__ == "__main__":
     stats.sort_stats("cumtime")
     stats.print_stats(30)
     
-    
+    if if_shutdown:
+        shutdown_now()

@@ -131,7 +131,8 @@ class Tokenizer:
         import tqdm
         
         # char 进度条
-        tq = tqdm.tqdm(unit=" tokens", desc="Encoding")
+        if __name__ == "__main__":
+            tq = tqdm.tqdm(unit=" tokens", desc="Encoding")
 
         read_str = ""
         read_str_list = []
@@ -176,7 +177,8 @@ class Tokenizer:
                 for chunk in text_chunk[:idx+1]:
                     tokens = self.encode(chunk)
                     for token in tokens:
-                        tq.update(1)
+                        if __name__ == "__main__":
+                            tq.update(1)
                         yield token
                         
                 read_str = "".join(text_chunk[idx+1:])
@@ -198,7 +200,8 @@ class Tokenizer:
                 pre_token_chunks = pre_tokens[:idx+1]
                 tokens = self._encode(pre_token_chunks)
                 for token in tokens:
-                    tq.update(1)
+                    if __name__ == "__main__":
+                        tq.update(1)
                     yield token
                 
                 read_str = "".join(pre_tokens[idx+1:])
@@ -221,7 +224,8 @@ class Tokenizer:
         
         tokens = self.encode(read_str)
         for token in tokens:
-            tq.update(1)
+            if __name__ == "__main__":
+                tq.update(1)
             yield token
             
         # raise NotImplementedError
