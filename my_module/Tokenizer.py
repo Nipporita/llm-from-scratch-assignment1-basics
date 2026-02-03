@@ -275,6 +275,8 @@ def TokenizeData(input_path: str,
 
     from cs336_basics.pretokenization_example import find_chunk_boundaries
 
+    size = os.path.getsize(input_path)
+    
     with open(input_path, "rb") as f:
         boundaries = find_chunk_boundaries(
             f, num_chunks, b"<|endoftext|>"
@@ -343,6 +345,9 @@ def TokenizeData(input_path: str,
         shape += part_arr.shape[0]
         part_arr._mmap.close()
     
+    print(f"Total tokens: {shape}")
+    print(f"Compression ratio: {os.path.getsize(input_path) / (shape):.2f} bytes/token")
+    
     arr = np.memmap(
         os.path.join(output_path, output_filename),
         dtype=np.uint16,
@@ -378,10 +383,10 @@ if __name__ == "__main__":
     # a.encode_iterable(temp)
     
     TokenizeData(
-        "/home/nipporita/大模型/Week 1/lfs-data/owt_valid.txt",
+        "/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-train.txt",
         "/home/nipporita/大模型/Week 1/lfs-data",
-        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/owt_bpe_vocab.pkl",
-        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/owt_bpe_merges.pkl",
+        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/tinystories_bpe_vocab.pkl",
+        "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/tinystories_bpe_merges.pkl",
         special_tokens=[
             b"<|endoftext|>",
         ],

@@ -19,6 +19,24 @@ from my_module.shutdown_now import shutdown_now
 
 from einops import rearrange, einsum
 
+def create_model(meta: dict, device: str) -> torch.nn.Module:
+    model = MyTransformer(
+        num_embeddings = meta["vocab_size"],
+        d_model = meta["d_model"],
+        num_layers = meta["num_layers"],
+        num_heads = meta["num_heads"],
+        theta= meta["theta"],
+        max_seq_len= meta["max_seq_len"],
+        d_ff = meta["d_ff"],
+        device=device,
+    ).to(device)
+    return model
+
+def load_meta(meta_path: str) -> dict:
+    with open(meta_path, "rb") as f:
+        meta = pickle.load(f)
+    return meta
+
 def MyGetBatch(dataset: npt.NDArray, batch_size: int, context_length: int, device: str
 ) -> tuple[torch.Tensor, torch.Tensor]:
     data_len = dataset.shape[0]
@@ -36,22 +54,35 @@ def MyGetBatch(dataset: npt.NDArray, batch_size: int, context_length: int, devic
         torch.from_numpy(y).to(device),
     )
 
-def MySaveCheckpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], loss: Optional[list[float]] = None) -> None:
+def MySaveCheckpoint(
+    model: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    iteration: int,
+    out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
+    train_log: dict,
+) -> None:
     checkpoint = {
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "iteration": iteration,
-        "loss": loss if loss is not None else [],
+        "train_log": train_log,
     }
     torch.save(checkpoint, out)
 
-def MyLoadCheckpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], model: torch.nn.Module, optimizer: torch.optim.Optimizer) -> tuple[int, list[float]]:
-    checkpoint = torch.load(src)
+
+def MyLoadCheckpoint(
+    src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
+    model: torch.nn.Module,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    device: Optional[str] = None,
+):
+    checkpoint = torch.load(src, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    if optimizer is not None:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     iteration = checkpoint["iteration"]
-    loss = checkpoint.get("loss", [])
-    return iteration, loss
+    train_log = checkpoint.get("train_log", None)
+    return iteration, train_log
 
 # 定义单次训练：
 
@@ -85,6 +116,17 @@ def SingleTrain(model: torch.nn.Module, optimizer: torch.optim.Optimizer, data: 
     
     return loss.item()
 
+def SingleValidate(model: torch.nn.Module, dataset: npt.NDArray, batch_size: int, context_length: int, device: str) -> float:
+    model.eval()
+    with torch.no_grad():
+        data = MyGetBatch(dataset, batch_size, context_length, device)
+        x_batch, y_batch = data
+        logits = model(x_batch)
+        logits = rearrange(logits, "b c v -> (b c) v")
+        targets = rearrange(y_batch, "b c -> (b c)")
+        loss = torch.nn.functional.cross_entropy(logits, targets)
+    return loss.item()
+
 
 def _innerTrain(
     model: torch.nn.Module,
@@ -96,7 +138,14 @@ def _innerTrain(
     start_step: int,
     lrarg: tuple[float, float, int, int],
     max_iters: int,
-) -> float:
+    val_dataset: Optional[npt.NDArray] = None,
+    train_log: Optional[dict] = None,
+):
+    if train_log is None:
+        train_log = {
+            "train": [],
+            "valid": [],
+        }
     
     # 进度条，从T进度回复
     progress = tqdm.tqdm(
@@ -107,8 +156,6 @@ def _innerTrain(
         unit="iter",
     )
     
-    losses = []
-    
     start_time = time.time()
     target_time = 7 * 60 * 60  # 7 hours
     
@@ -117,7 +164,23 @@ def _innerTrain(
         for T in progress:
             data = MyGetBatch(dataset, batch_size, context_length, device)
             loss = SingleTrain(model, optimizer, data, T, lrarg)
-            losses.append(loss)
+            elapsed = time.time() - start_time
+
+            train_log["train"].append({
+                "step": T,
+                "loss": loss,
+                "time": elapsed,
+            })
+            
+            if val_dataset is not None and (T + 1) % 100 == 0:
+                val_loss = SingleValidate(model, val_dataset, batch_size, context_length, device)
+                train_log["valid"].append({
+                    "step": T,
+                    "loss": val_loss,
+                    "time": elapsed,
+                })
+                progress.set_postfix({"loss": loss, "val_loss": val_loss})
+            
             if time.time() - start_time > target_time:
                 print(f"Reached target training time of {target_time} seconds at step {T}.")
                 break
@@ -130,12 +193,13 @@ def _innerTrain(
     finally:
         progress.close()
     
-    return success, T, losses, ex
+    return success, T, train_log, ex
 
 def Train(
     path: str,
     dataset_path: str,
     meta_path: str,
+    val_dataset_path: Optional[str] = None,
     # 初创时需要的参数
     **meta_kwargs,
 ):
@@ -145,6 +209,15 @@ def Train(
         dtype=np.uint16,
         mode="r",
     )
+    
+    if val_dataset_path is not None:
+        val_dataset = np.memmap(
+            val_dataset_path,
+            dtype=np.uint16,
+            mode="r",
+        )
+    else:
+        val_dataset = None
     
     # 读取元信息
     if os.path.exists(meta_path):
@@ -163,27 +236,28 @@ def Train(
 
     device = meta.get("device", "cpu")
     
-    model = MyTransformer(
-        num_embeddings = meta["vocab_size"],
-        d_model = meta["d_model"],
-        num_layers = meta["num_layers"],
-        num_heads = meta["num_heads"],
-        theta= meta["theta"],
-        max_seq_len= meta["max_seq_len"],
-        d_ff = meta["d_ff"],
-        device=device,
-    ).to(device)
+    model = create_model(meta, device)
     
     # 尝试加载检查点
     optimizer = MyAdamW(model.parameters(), lr=1e-3, weight_decay=0.01)
     start_step = 0
     if os.path.exists(path):
-        start_step, prev_losses = MyLoadCheckpoint(path, model, optimizer)
+        start_step, train_log = MyLoadCheckpoint(path, model, optimizer, device)
+        if train_log is None:
+            train_log = {
+                "meta": meta,
+                "train": [],
+                "valid": [],
+            }
         print(f"Resumed from checkpoint at step {start_step}.")
     else:
-        prev_losses = []
+        train_log = {
+            "meta": meta,
+            "train": [],
+            "valid": [],
+        }
     
-    success, final_step, losses, e = _innerTrain(
+    success, final_step, train_log, e = _innerTrain(
         model=model,
         optimizer=optimizer,
         dataset=dataset,
@@ -198,9 +272,16 @@ def Train(
             meta["max_iters"],
         ),
         max_iters=meta["max_iters"],
+        val_dataset=val_dataset,
     )
     
-    MySaveCheckpoint(model, optimizer, final_step, path, loss=prev_losses + losses)
+    MySaveCheckpoint(
+        model=model,
+        optimizer=optimizer,
+        iteration=final_step,
+        out=path,
+        train_log=train_log,
+    )
     
     return not isinstance(e, KeyboardInterrupt)
 

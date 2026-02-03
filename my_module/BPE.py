@@ -15,6 +15,8 @@ import pickle
 PATTERN = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 PAT = re.compile(PATTERN)
 
+OUTPUT_DIR = "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/pre_train_output"
+
 def split_with_special(text, special_tokens):
     if not special_tokens:
         return [text]
@@ -53,9 +55,13 @@ def read_chunk(args):
         
         progress_queue.put(("part_len", len(part)))
     
+    output_file_name = os.path.join(OUTPUT_DIR, f"pre_token_freq_chunk_{idx}.pkl")
+    with open(output_file_name, "wb") as f:
+        pickle.dump(pre_token_freq_small, f)
+    
     progress_queue.put(("chunk_done", 1))
 
-    return idx, pre_token_freq_small
+    return idx, output_file_name
 
 def run_parallel(tasks, n_workers):
     manager = mp.Manager()
@@ -162,8 +168,8 @@ def train_bpe(
     
     text_chunk = ""
     
-    num_processes = 8
-    num_chunks = 8
+    num_processes = min(16, mp.cpu_count() - 1)
+    num_chunks = num_processes * 16
     max_chunk_size = os.path.getsize(input_path) // num_chunks
     
     from cs336_basics.pretokenization_example import find_chunk_boundaries
@@ -190,12 +196,18 @@ def train_bpe(
         num_processes,
     )
     
-    for idx, pre_token_freq_small in results:
+    for idx, output_name in results:
+        with open(output_name, "rb") as f:
+            pre_token_freq_small = pickle.load(f)
+
         for byte_token, freq in pre_token_freq_small.items():
             if byte_token in pre_token_freq:
                 pre_token_freq[byte_token] += freq
             else:
                 pre_token_freq[byte_token] = freq
+    
+    for _, output_name in results:
+        os.remove(output_name)
                 
     # for start, end in zip(boundaries[:-1], boundaries[1:]):
     #     f.seek(start)
@@ -622,11 +634,11 @@ if __name__ == "__main__":
     # 你原来的代码（完全不动）
     # -------------------------------------------------
 
-    # train_bpe(
-    #     r"/home/nipporita/大模型/Week 1/lfs-data/owt_train.txt",
-    #     32000,
-    #     ["<|endoftext|>"]
-    # )
+    train_bpe(
+        r"/home/nipporita/大模型/Week 1/lfs-data/owt_train.txt",
+        32000,
+        ["<|endoftext|>"]
+    )
 
     # vocab, merges = train_bpe_from_token_freq(
     #     "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/pre_token_freq.pkl",
@@ -634,11 +646,11 @@ if __name__ == "__main__":
     #     32000
     # )
 
-    vocab, merges = train_bpe(
-        r"/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-train.txt",
-        10000,
-        ["<|endoftext|>"]
-    )
+    # vocab, merges = train_bpe(
+    #     r"/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-train.txt",
+    #     10000,
+    #     ["<|endoftext|>"]
+    # )
 
     pr.disable()
 

@@ -262,7 +262,6 @@ class MyMultiHeadSelfAttentionWithRoPE(MyMultiHeadSelfAttention):
         result = einsum(O, result, "... d_model hd_v, ... s_l hd_v -> ... s_l d_model")
         
         return result
-    
 
 class MyPreNormTransformerBlock(torch.nn.Module):
     def __init__(self, 
@@ -294,6 +293,10 @@ class MyPreNormTransformerBlock(torch.nn.Module):
         x = x + self.ffn.forward(self.ln2.forward(x))
         
         return x
+    
+    @property
+    def max_seq_len(self) -> int:
+        return self.attn.max_seq_len
 
 class MyTransformer(torch.nn.Module):
     def __init__(self,
@@ -337,4 +340,8 @@ class MyTransformer(torch.nn.Module):
         
         # return possibility
         return logits
+    
+    @property
+    def max_seq_len(self) -> int:
+        return self.layers[0].max_seq_len
             

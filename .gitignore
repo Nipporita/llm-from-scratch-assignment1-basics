@@ -164,3 +164,5 @@ cython_debug/
 *.npy
 pre_token_freq.pkl
 my_module/checkpoint.pth
+my_model/checkpoint.pth
+my_model/meta.pkl
