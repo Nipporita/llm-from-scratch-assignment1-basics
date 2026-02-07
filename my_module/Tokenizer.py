@@ -383,7 +383,7 @@ if __name__ == "__main__":
     # a.encode_iterable(temp)
     
     TokenizeData(
-        "/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-train.txt",
+        "/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-valid.txt",
         "/home/nipporita/大模型/Week 1/lfs-data",
         "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/tinystories_bpe_vocab.pkl",
         "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/cs336_basics/tinystories_bpe_merges.pkl",

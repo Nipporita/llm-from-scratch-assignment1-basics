@@ -19,6 +19,8 @@ from my_module.shutdown_now import shutdown_now
 
 from einops import rearrange, einsum
 
+import wandb
+
 def create_model(meta: dict, device: str) -> torch.nn.Module:
     model = MyTransformer(
         num_embeddings = meta["vocab_size"],
@@ -30,6 +32,7 @@ def create_model(meta: dict, device: str) -> torch.nn.Module:
         d_ff = meta["d_ff"],
         device=device,
     ).to(device)
+    model = torch.compile(model)
     return model
 
 def load_meta(meta_path: str) -> dict:
@@ -172,6 +175,12 @@ def _innerTrain(
                 "time": elapsed,
             })
             
+            wandb.log({
+                "train/loss": loss,
+                "train/step": T,
+                "train/time": elapsed,
+            }, step=T)
+            
             if val_dataset is not None and (T + 1) % 100 == 0:
                 val_loss = SingleValidate(model, val_dataset, batch_size, context_length, device)
                 train_log["valid"].append({
@@ -179,6 +188,12 @@ def _innerTrain(
                     "loss": val_loss,
                     "time": elapsed,
                 })
+                wandb.log({
+                    "valid/loss": val_loss,
+                    "valid/step": T,
+                    "valid/time": elapsed,
+                }, step=T)
+                
                 progress.set_postfix({"loss": loss, "val_loss": val_loss})
             
             if time.time() - start_time > target_time:
@@ -232,7 +247,10 @@ def Train(
     if "device" in meta_kwargs:
         meta["device"] = meta_kwargs["device"]
     
-    print(meta)
+    wandb.init(
+        project="llm-from-scratch",
+        config=meta,
+    )
 
     device = meta.get("device", "cpu")
     
@@ -293,27 +311,38 @@ if __name__ == "__main__":
     pr = cProfile.Profile()
     pr.enable()
 
-    if_shutdown = Train(
-        path="/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/checkpoint.pth",
-        dataset_path="/home/nipporita/大模型/Week 1/lfs-data/owt_valid.npy",
-        meta_path="/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/my_module/meta.pkl",
-        # 结构参数
-        vocab_size=32000,
-        num_layers=4,
-        d_model=16,
-        num_heads=4,
-        d_ff=16,
-        # 网络超参数
-        theta=0.7,
-        max_seq_len=128,
-        # 训练超参数
-        batch_size=16,
-        lr_initial=1e-3,
-        lr_final=1e-5,
-        lr_warmup_iters=1000,
-        max_iters=10000,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-    )
+    
+    import os
+    main_path = "/home/nipporita/大模型/Week 1/llm-from-scratch-assignment1-basics/"
+    model_path = os.path.join(main_path, "my_model")
+    dataset_path = "/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-train.npy"
+    valid_dataset_path = "/home/nipporita/大模型/Week 1/lfs-data/TinyStoriesV2-GPT4-valid.npy"
+    
+    for learning_rate in [1e-4, 1e-3, 1e-2, 1e-1]:
+        print(f"Learning Rate: {learning_rate}")
+    
+        if_shutdown = Train(
+            path=os.path.join(model_path, f"checkpoint_{learning_rate:.0e}.pth"),
+            dataset_path=dataset_path,
+            meta_path=os.path.join(model_path, f"meta_{learning_rate:.0e}.pkl"),
+            valid_dataset_path=os.path.join(model_path, "valid_dataset.npy"),
+            # 结构参数
+            vocab_size=10000,
+            num_layers=4,
+            d_model=512,
+            num_heads=16,
+            d_ff=1344,
+            # 网络超参数
+            theta=10000,
+            max_seq_len=256,
+            # 训练超参数
+            batch_size=128,
+            lr_initial=learning_rate,
+            lr_final=learning_rate * 0.01,
+            lr_warmup_iters=1000,
+            max_iters=10000,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
 
     pr.disable()
 

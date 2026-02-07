@@ -166,3 +166,9 @@ pre_token_freq.pkl
 my_module/checkpoint.pth
 my_model/checkpoint.pth
 my_model/meta.pkl
+my_model/tinystories_checkpoint.pth
+my_model/tinystories_meta.pkl
+my_module/wandb/latest-run
+my_module/wandb/
+wandb/latest-run
+wandb/
